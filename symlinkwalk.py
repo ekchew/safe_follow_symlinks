@@ -36,6 +36,34 @@ class SymlinkWalk:
     directories safely while following symlinks. It manages any state needed by
     the recursive algorithms and reports problem paths through public
     attributes.
+
+    Input attributes (those you may wish to supply):
+        path_filter: a callback to control which paths get scanned
+            The filter should return True to accept the path or False to skip
+            it. The filter is called on every file, directory, and even
+            partially resolved symlink paths. You can save iter_tree() a lot
+            of work by not drilling down into uninteresting directories.
+        yield_unique: never yield the same path twice? (default=False)
+            While the algorithm stops any attempt by a symlink to recurse back
+            into itself, it does not go so far as to prevent the same path from
+            being yielded multiple times, particularly by iter_tree(). For
+            example, a symlink may point back to a directory that had already
+            been scanned. You can prevent such a double-scan, though you may
+            not always want to do so?
+
+    Output attributes (those that provide you info after calling methods):
+        path_hits: a dict indicating how often unique paths were encountered
+            This may be helpful if you set yield_unique True but still want to
+            know which paths were encountered multiple times?
+        recursed: a set of all symlinks shown to recurse
+            Note that recursive symlinks do get followed once before the
+            recursion is stopped.
+        missing: a set of all missing paths
+            This is intended to catch any broken symlinks. For these, the
+            symlink path itself is recorded rather than where it points.
+            If the path you are scanning does not itself exist, however, it may
+            also wind up here.
+        skipped: a set of all paths skipped when path_filter() returned False
     '''
     path_filter: Callable[[PathRef], bool]
     yield_unique: bool
@@ -71,10 +99,29 @@ class SymlinkWalk:
 
     @staticmethod
     def allow_all_paths(pathRef: PathRef) -> bool:
+        '''
+        The default path_filter returns True for every path.
+        '''
         return True
 
     @classmethod
-    def resolve_path(cls, pathRef: PathRef) -> tuple[PathRef, bool]:
+    def resolve_path(
+        cls, pathRef: PathRef, expand_user: bool = False
+    ) -> tuple[PathRef, bool]:
+        '''
+        Args:
+            pathRef: an absolute or relative path
+
+        Returns: tuple containing the fields:
+            PathRef: result path derived from input pathRef
+            bool: flag indicating whether path item was found?
+                If True, the result path should be the absolute path to an
+                existing item with all symlinks along the way resolved.
+                If False, the return path essentially indicates how far the
+                algorithm got before encountering a missing path element.
+        '''
+        if expand_user:
+            pathRef = PathRef(pathRef.path.expanduser())
         slw = cls()
         if pathRef.path.is_absolute():
             newPath = PathRef(pathRef.path.parts[0])
@@ -237,11 +284,9 @@ def _parse_command_line():
         help='''
             Despite the fact that this script prevents symlink recursion, it is
             still possible for the same path to appear more than once in a
-            listing. For example, some directory 'foo' may get listed once, and
-            then later on, there is a symlink to 'foo'. You can use the
-            --unique-paths option to prevent listing any path twice as an 'f'
-            or 'd' record. You can still check all paths that appeared more
-            than once by looking at the 'u#' lines.
+            listing. You can use the --unique-paths option to prevent listing
+            any path twice as an 'f' or 'd' record. You can still check all
+            paths that appeared more than once by looking at the 'u#' lines.
             '''
     )
 
