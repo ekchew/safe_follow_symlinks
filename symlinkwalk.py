@@ -9,7 +9,9 @@ else:
 from argparse import ArgumentParser
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from traceback import print_exc
 import os
+import sys
 
 
 _g_debug: bool = False
@@ -75,9 +77,7 @@ class SymlinkWalk:
 
     def _scan(self, pathRef: PathRef) -> Iterator[PathRef]:
         if pathRef.path_or_entry.name == '..':
-            print(str(pathRef))
             pathRef = PathRef(os.path.normpath(pathRef.pathlike))
-            print("->", str(pathRef))
 
         if pathRef.path_or_entry.is_symlink():
             if pathRef in self.symlinks:
@@ -161,23 +161,29 @@ def _print_path(pr: PathRef):
 
 if __name__ == "__main__":
     args = _parse_command_line()
-    targets = [PathRef(p) for p in args.targets] if args.targets \
-        else [PathRef()]
-    for target in targets:
-        with SymlinkWalk() as slw:
-            if args.resolve == 'path':
-                pr = slw.resolve_path(target)
-                if pr:
-                    _print_path(pr)
-            elif args.resolve == 'list':
-                for pr in slw.iter_dir(target):
-                    _print_path(pr)
-            else:
-                for pr in slw.iter_tree(target):
-                    _print_path(pr)
-            for pr in sorted(slw.symlinks - slw.repeats):
-                print("s", pr)
-            for pr in sorted(slw.repeats):
-                print("r", pr)
-            for pr in sorted(slw.missing):
-                print("m", pr)
+    try:
+        targets = [PathRef(p) for p in args.targets] if args.targets \
+            else [PathRef()]
+        for target in targets:
+            with SymlinkWalk() as slw:
+                if args.resolve == 'path':
+                    pr = slw.resolve_path(target)
+                    if pr:
+                        _print_path(pr)
+                elif args.resolve == 'list':
+                    for pr in slw.iter_dir(target):
+                        _print_path(pr)
+                else:
+                    for pr in slw.iter_tree(target):
+                        _print_path(pr)
+                for pr in sorted(slw.symlinks - slw.repeats):
+                    print("s", pr)
+                for pr in sorted(slw.repeats):
+                    print("r", pr)
+                for pr in sorted(slw.missing):
+                    print("m", pr)
+    except Exception as ex:
+        print("ERROR:", ex, file=sys.stderr)
+        if _g_debug:
+            print_exc()
+        sys.exit(1)
