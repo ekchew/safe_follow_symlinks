@@ -21,7 +21,7 @@ class PathRef:
     def path_or_entry(self) -> Path | os.DirEntry:
         return Path(self.ref) if isinstance(self.ref, str) else self.ref
 
-    def __init__(self, ref: str | Path | os.DirEntry):
+    def __init__(self, ref: str | Path | os.DirEntry = Path.cwd()):
         self.ref = ref
 
     def __str__(self) -> str:
