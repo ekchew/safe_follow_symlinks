@@ -21,17 +21,17 @@ def _yield_path(pathRef: PathRef) -> Iterator[PathRef]:
 
 @dataclass(init=False)
 class SymlinkWalk:
-    missing: set[PathRef]
+    symlinks: set[PathRef]
     repeats: set[PathRef]
+    missing: set[PathRef]
 
-    _seen_links: set[PathRef] = field(repr=_g_debug)
     _part_stack: list = field(repr=_g_debug)
     _resolve_fn: Callable[[PathRef], Iterator[PathRef]] = field(repr=_g_debug)
 
     def __init__(self):
         self.missing = set()
         self.repeats = set()
-        self._seen_links = set()
+        self.symlinks = set()
         self._part_stack = []
         self._resolve_fn = _yield_path
 
@@ -68,10 +68,10 @@ class SymlinkWalk:
             print("->", str(pathRef))
 
         if pathRef.path_or_entry.is_symlink():
-            if pathRef in self._seen_links:
+            if pathRef in self.symlinks:
                 self.repeats.add(pathRef)
                 return
-            self._seen_links.add(pathRef)
+            self.symlinks.add(pathRef)
 
             link = pathRef.path.readlink()
             if link.is_absolute():
@@ -100,7 +100,7 @@ class SymlinkWalk:
     def reset(self):
         self.missing.clear()
         self.repeats.clear()
-        self._seen_links.clear()
+        self.symlinks.clear()
         self._part_stack.clear()
         self._resolve_fn = _yield_path
 
@@ -163,7 +163,7 @@ if __name__ == "__main__":
             else:
                 for pr in slw.iter_tree(target):
                     _print_path(pr)
-            for pr in sorted(slw._seen_links - slw.repeats):
+            for pr in sorted(slw.symlinks - slw.repeats):
                 print("s", pr)
             for pr in sorted(slw.repeats):
                 print("r", pr)
