@@ -92,7 +92,7 @@ class SymlinkWalk:
 
     def _scan(self, pathRef: PathRef) -> Iterator[PathRef]:
         if pathRef.path_or_entry.name == '..':
-            pathRef = PathRef(os.path.normpath(pathRef.pathlike))
+            pathRef = PathRef(os.path.normpath(pathRef))
 
         if not self.path_filter(pathRef):
             self.skipped.add(pathRef)
@@ -145,7 +145,7 @@ class SymlinkWalk:
     def _yield_contents(self, pathRef: PathRef) -> Iterator[PathRef]:
         yield from self._yield_path(pathRef)
         if pathRef.path_or_entry.is_dir():
-            with os.scandir(pathRef.pathlike) as sd:
+            with os.scandir(pathRef) as sd:
                 for entry in sd:
                     yield from self._scan(PathRef(entry))
 
