@@ -53,13 +53,25 @@ class SymlinkWalk:
         except StopIteration:
             return None
 
-    def iter_dir(self, pathRef: PathRef) -> Iterator[PathRef]:
+    def iter_dir(
+        self, pathRef: PathRef, resolved: bool = False
+    ) -> Iterator[PathRef]:
+        if resolved:
+            target = pathRef
+        elif (target := self.resolve_path(pathRef)) is None:
+            return
         self._yield_fn = _yield_path
-        yield from self._yield_contents(pathRef)
+        yield from self._yield_contents(target)
 
-    def iter_tree(self, pathRef: PathRef) -> Iterator[PathRef]:
+    def iter_tree(
+        self, pathRef: PathRef, resolved: bool = False
+    ) -> Iterator[PathRef]:
+        if resolved:
+            target = pathRef
+        elif (target := self.resolve_path(pathRef)) is None:
+            return
         self._yield_fn = self._yield_contents
-        yield from self._yield_contents(pathRef)
+        yield from self._yield_contents(target)
 
     def _scan(self, pathRef: PathRef) -> Iterator[PathRef]:
         if pathRef.path_or_entry.name == '..':
