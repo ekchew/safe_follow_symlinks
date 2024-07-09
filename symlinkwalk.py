@@ -26,14 +26,14 @@ class SymlinkWalk:
     missing: set[PathRef]
 
     _part_stack: list = field(repr=_g_debug)
-    _resolve_fn: Callable[[PathRef], Iterator[PathRef]] = field(repr=_g_debug)
+    _yield_fn: Callable[[PathRef], Iterator[PathRef]] = field(repr=_g_debug)
 
     def __init__(self):
         self.missing = set()
         self.repeats = set()
         self.symlinks = set()
         self._part_stack = []
-        self._resolve_fn = _yield_path
+        self._yield_fn = _yield_path
 
     def __enter__(self):
         return self
@@ -54,11 +54,11 @@ class SymlinkWalk:
             return None
 
     def iter_dir(self, pathRef: PathRef) -> Iterator[PathRef]:
-        self._resolve_fn = _yield_path
+        self._yield_fn = _yield_path
         yield from self._yield_contents(pathRef)
 
     def iter_tree(self, pathRef: PathRef) -> Iterator[PathRef]:
-        self._resolve_fn = self._yield_contents
+        self._yield_fn = self._yield_contents
         yield from self._yield_contents(pathRef)
 
     def _scan(self, pathRef: PathRef) -> Iterator[PathRef]:
@@ -86,7 +86,7 @@ class SymlinkWalk:
                 pathRef = PathRef(pathRef.path/self._part_stack.pop())
                 yield from self._scan(pathRef)
             else:
-                yield from self._resolve_fn(pathRef)
+                yield from self._yield_fn(pathRef)
         else:
             self.missing.add(pathRef)
 
@@ -102,7 +102,7 @@ class SymlinkWalk:
         self.repeats.clear()
         self.symlinks.clear()
         self._part_stack.clear()
-        self._resolve_fn = _yield_path
+        self._yield_fn = _yield_path
 
 
 def _parse_command_line():
