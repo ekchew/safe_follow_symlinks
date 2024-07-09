@@ -96,28 +96,34 @@ class SymlinkWalk:
             self.skipped.add(pathRef)
             return
 
-        if pathRef.path_or_entry.is_symlink():
-            if pathRef in self.symlinks:
-                self.repeats.add(pathRef)
-                return
-            self.symlinks.add(pathRef)
+        symlink: PathRef | None = None
+        try:
+            if pathRef.path_or_entry.is_symlink():
+                if pathRef in self.symlinks:
+                    self.repeats.add(pathRef)
+                    return
+                self.symlinks.add(pathRef)
+                symlink = pathRef
 
-            link = pathRef.path.readlink()
-            if link.is_absolute():
-                pathRef = PathRef(link.parts[0])
-                self._part_stack[:] = link.parts[:0:-1]
-            else:
-                pathRef = PathRef(pathRef.path.parent)
-                self._part_stack.extend(reversed(link.parts))
+                link = pathRef.path.readlink()
+                if link.is_absolute():
+                    pathRef = PathRef(link.parts[0])
+                    self._part_stack[:] = link.parts[:0:-1]
+                else:
+                    pathRef = PathRef(pathRef.path.parent)
+                    self._part_stack.extend(reversed(link.parts))
 
-        if pathRef.exists():
-            if self._part_stack:
-                pathRef = PathRef(pathRef.path/self._part_stack.pop())
-                yield from self._scan(pathRef)
+            if pathRef.exists():
+                if self._part_stack:
+                    pathRef = PathRef(pathRef.path/self._part_stack.pop())
+                    yield from self._scan(pathRef)
+                else:
+                    yield from self._yield_fn(pathRef)
             else:
-                yield from self._yield_fn(pathRef)
-        else:
-            self.missing.add(pathRef)
+                self.missing.add(pathRef)
+        finally:
+            if symlink is not None:
+                self.symlinks.remove(symlink)
 
     def _yield_path(self, pathRef: PathRef) -> Iterator[PathRef]:
         if self.unique_paths is None:
@@ -149,12 +155,10 @@ def _parse_command_line():
             situations. Each line printed to stdout has a format looking
             something like 'f /full/path'. The 'f' here signfies a file, as
             opposed to a 'd' for directory. You may also see the following
-            codes: 's' (well-behaved symlinks), 'r' (repeated symlinks), 'm'
-            (missing items), and 'x' (excluded paths). A repeated symlink may
-            indicate recursion or several parallel paths merging into the same
-            place. In either case, it will not be followed a second time.
-            Missing items may arise from broken symlinks, though a missing
-            primary target may also be flagged with an 'm'.'''
+            codes: 's' (well-behaved symlinks), 'r' (recursive symlink), 'm'
+            (missing items), and 'x' (excluded paths). Missing items may arise
+            from broken symlinks, though a missing primary target may also be
+            flagged with an 'm'.'''
     )
     ap.add_argument(
         "targets", metavar="TARGET", nargs="*",
