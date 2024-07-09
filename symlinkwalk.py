@@ -23,11 +23,12 @@ class SymlinkWalk:
     path_filter: Callable[[PathRef], bool]
     unique_paths: set[PathRef] | None
 
-    symlinks: set[PathRef]
-    repeats: set[PathRef]
+    recursed: set[PathRef]
     missing: set[PathRef]
     skipped: set[PathRef]
+    blocked: set[PathRef]
 
+    _symlinks: list[PathRef] = field(repr=_g_debug)
     _part_stack: list = field(repr=_g_debug)
     _yield_fn: Callable[[PathRef], Iterator[PathRef]] = field(repr=_g_debug)
 
@@ -38,9 +39,10 @@ class SymlinkWalk:
         self.path_filter = path_filter if path_filter else self.allow_all_paths
         self.unique_paths = unique_paths
         self.missing = set()
-        self.repeats = set()
-        self.symlinks = set()
+        self.recursed = set()
         self.skipped = set()
+        self.blocked = set()
+        self._symlinks = []
         self._part_stack = []
         self._yield_fn = self._yield_path
 
@@ -96,13 +98,13 @@ class SymlinkWalk:
             self.skipped.add(pathRef)
             return
 
-        symlink: PathRef | None = None
+        symlink: bool = False
         try:
             if pathRef.path_or_entry.is_symlink():
-                if pathRef in self.symlinks:
-                    self.repeats.add(pathRef)
+                if pathRef in self._symlinks:
+                    self.recursed.add(pathRef)
                     return
-                self.symlinks.add(pathRef)
+                self._symlinks.append(pathRef)
                 symlink = pathRef
 
                 link = pathRef.path.readlink()
@@ -119,16 +121,24 @@ class SymlinkWalk:
                     yield from self._scan(pathRef)
                 else:
                     yield from self._yield_fn(pathRef)
+            elif self._symlinks:
+                self.missing.add(self._symlinks[-1])
             else:
                 self.missing.add(pathRef)
         finally:
-            if symlink is not None:
-                self.symlinks.remove(symlink)
+            if symlink:
+                self._symlinks.pop()
 
     def _yield_path(self, pathRef: PathRef) -> Iterator[PathRef]:
         if self.unique_paths is None:
             yield pathRef
-        elif pathRef not in self.unique_paths:
+        elif pathRef in self.unique_paths:
+            if self._symlinks and \
+                    self.resolve_path(self._symlinks[-1]) == pathRef:
+                self.blocked.add(self._symlinks[-1])
+            else:
+                self.blocked.add(pathRef)
+        else:
             self.unique_paths.add(pathRef)
             yield pathRef
 
@@ -141,8 +151,10 @@ class SymlinkWalk:
 
     def reset(self):
         self.missing.clear()
-        self.repeats.clear()
-        self.symlinks.clear()
+        self.recursed.clear()
+        self.skipped.clear()
+        self.blocked.clear()
+        self._symlinks.clear()
         self._part_stack.clear()
         self._yield_fn = self._yield_path
 
@@ -155,10 +167,17 @@ def _parse_command_line():
             situations. Each line printed to stdout has a format looking
             something like 'f /full/path'. The 'f' here signfies a file, as
             opposed to a 'd' for directory. You may also see the following
-            codes: 's' (well-behaved symlinks), 'r' (recursive symlink), 'm'
-            (missing items), and 'x' (excluded paths). Missing items may arise
-            from broken symlinks, though a missing primary target may also be
-            flagged with an 'm'.'''
+            codes: 'r' = recursive symlink, 'm' = missing path, 'b' = blocked
+            path, and 'x' = excluded path. Recursive symlinks are followed once
+            but never a second time. Missing paths are typically broken
+            symlinks (in which case the symlink path itself is printed), though
+            it's possible your primary target may also be missing? A blocked
+            path is one that is flagged as already being printed in
+            --unique-paths mode. If the path is the destination of a symlink,
+            the symlink path will be printed instead of the resolved path.
+            Finally, an excluded path is one which matched an --exclude
+            pattern.
+            '''
     )
     ap.add_argument(
         "targets", metavar="TARGET", nargs="*",
@@ -247,9 +266,9 @@ if __name__ == "__main__":
                             _print_path(pr)
                     for pr in sorted(slw.skipped):
                         print("x", pr)
-                    for pr in sorted(slw.symlinks - slw.repeats):
-                        print("s", pr)
-                    for pr in sorted(slw.repeats):
+                    for pr in sorted(slw.blocked):
+                        print("b", pr)
+                    for pr in sorted(slw.recursed):
                         print("r", pr)
                     for pr in sorted(slw.missing):
                         print("m", pr)
