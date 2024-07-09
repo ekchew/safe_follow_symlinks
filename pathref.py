@@ -36,7 +36,10 @@ class PathRef:
     def __eq__(self, rhs: PathRef) -> bool:
         return str(self) == str(rhs)
 
-    def hash(self) -> int:
+    def __lt__(self, rhs: PathRef) -> bool:
+        return str(self).lower() < str(rhs).lower()
+
+    def __hash__(self) -> int:
         return hash(str(self))
 
     def exists(self) -> bool:
