@@ -54,25 +54,19 @@ class SymlinkWalk:
     def allow_all_paths(pathRef: PathRef) -> bool:
         return True
 
-    def resolve_path(self, pathRef: PathRef) -> PathRef | None:
-        filter0 = self.path_filter
-        unique0 = self.unique_paths
-        self.path_filter = self.allow_all_paths
-        self.unique_paths = None
+    @classmethod
+    def resolve_path(cls, pathRef: PathRef) -> PathRef | None:
+        slw = cls()
+        if pathRef.path.is_absolute():
+            newPath = PathRef(pathRef.path.parts[0])
+            slw._part_stack[:] = pathRef.path.parts[:0:-1]
+        else:
+            newPath = PathRef()
+            slw._part_stack.extend(reversed(pathRef.path.parts))
         try:
-            if pathRef.path.is_absolute():
-                newPath = PathRef(pathRef.path.parts[0])
-                self._part_stack[:] = pathRef.path.parts[:0:-1]
-            else:
-                newPath = PathRef()
-                self._part_stack.extend(reversed(pathRef.path.parts))
-            try:
-                return next(self._scan(newPath))
-            except StopIteration:
-                return None
-        finally:
-            self.path_filter = filter0
-            self.unique_paths = unique0
+            return next(slw._scan(newPath))
+        except StopIteration:
+            return None
 
     def iter_dir(
         self, pathRef: PathRef, resolved: bool = False
@@ -229,25 +223,32 @@ if __name__ == "__main__":
             else [PathRef()]
         for target in targets:
             path_filter = _get_path_filter(args.exclude)
-            with SymlinkWalk(path_filter=path_filter) as slw:
-                if args.resolve == 'path':
-                    pr = slw.resolve_path(target)
-                    if pr:
-                        _print_path(pr)
-                elif args.resolve == 'list':
-                    for pr in slw.iter_dir(target):
-                        _print_path(pr)
+            if args.resolve == 'path':
+                pr = SymlinkWalk.resolve_path(target)
+                if pr:
+                    _print_path(pr)
                 else:
-                    for pr in slw.iter_tree(target):
-                        _print_path(pr)
-                for pr in sorted(slw.skipped):
-                    print("x", pr)
-                for pr in sorted(slw.symlinks - slw.repeats):
-                    print("s", pr)
-                for pr in sorted(slw.repeats):
-                    print("r", pr)
-                for pr in sorted(slw.missing):
                     print("m", pr)
+            else:
+                with SymlinkWalk(path_filter=path_filter) as slw:
+                    if args.resolve == 'path':
+                        pr = slw.resolve_path(target)
+                        if pr:
+                            _print_path(pr)
+                    elif args.resolve == 'list':
+                        for pr in slw.iter_dir(target):
+                            _print_path(pr)
+                    else:
+                        for pr in slw.iter_tree(target):
+                            _print_path(pr)
+                    for pr in sorted(slw.skipped):
+                        print("x", pr)
+                    for pr in sorted(slw.symlinks - slw.repeats):
+                        print("s", pr)
+                    for pr in sorted(slw.repeats):
+                        print("r", pr)
+                    for pr in sorted(slw.missing):
+                        print("m", pr)
     except Exception as ex:
         print("ERROR:", ex, file=sys.stderr)
         if _g_debug:
