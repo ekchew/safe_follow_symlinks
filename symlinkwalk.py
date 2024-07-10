@@ -153,7 +153,7 @@ class SymlinkWalk:
         else:
             target = self.resolve_path(pathRef)
             if not target.exists():
-                self.missing.add(target)
+                self.bad_paths.add(target)
                 return
         self._yield_fn = self._yield_contents
         yield from self._yield_contents(target)
@@ -180,7 +180,7 @@ class SymlinkWalk:
         try:
             if pathRef.path_or_entry.is_symlink():
                 if pathRef in self._symlinks:
-                    self.recursed.add(pathRef)
+                    self.bad_paths.add(RecursiveLink(pathRef.ref))
                     self._elem_stack.clear()
                     return
                 self._symlinks.append(pathRef)
@@ -208,9 +208,9 @@ class SymlinkWalk:
                     yield from self._yield_fn(pathRef)
             else:
                 if self._elem_stack and self._elem_stack[-1].in_link:
-                    self.missing.add(BrokenLink(self._symlinks[-1].ref))
+                    self.bad_paths.add(BrokenLink(self._symlinks[-1].ref))
                 else:
-                    self.missing.add(MissingPath(
+                    self.bad_paths.add(MissingPath(
                         pathRef.path.joinpath(*reversed(self._elem_stack))
                     ))
                 self._elem_stack.clear()
