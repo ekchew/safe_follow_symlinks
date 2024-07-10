@@ -49,7 +49,7 @@ class PathRef:
 
     def __init__(
         self, ref: bytes | str | Path | os.DirEntry | None = None,
-        encoding: str = "utf-8"
+        encoding: str = 'utf-8'
     ):
         self.ref = Path.cwd() if ref is None else ref
         self.encoding = encoding
@@ -68,7 +68,7 @@ class PathRef:
         return s
 
     def __repr__(self) -> str:
-        return f"PathRef(ref={self.ref!r})"
+        return f'{type(self).__name__}(ref={self.ref!r})'
 
     def __eq__(self, rhs: PathRef) -> bool:
         return str(self) == str(rhs)
@@ -87,7 +87,34 @@ class PathRef:
         Returns: True if a file system object is thought to exist at the path
             If ref is an os.DirEntry, this is assumed to be so since
             os.scandir() would not have yielded it otherwise. In other cases,
-            os.path.exists() is called.
+            os.path.exists() is typically called, though this behaviour may be
+            altered by a subclass.
         '''
         return True if isinstance(self.ref, os.DirEntry) \
             else os.path.exists(self.ref)
+
+    def is_broken_link(self) -> bool:
+        '''
+        Returns: True if the path is to a confirmed broken symlink
+            A False return value does not necessarily mean it is NOT a broken
+            symlink, however. (The True value is returned by a subclass.)
+        '''
+        return False
+
+
+class MissingPath(PathRef):
+    '''
+    A subclass of PathRef in which the exists() method always returns False.
+    symlinkwalk.SymlinkWalk.resolve_path() may return one of these.
+    '''
+    def exists(self) -> bool:
+        return False
+
+
+class BrokenLink(MissingPath):
+    '''
+    A subclass of MissingPath in which is_broken_link() returns True. This may
+    also be returned by symlinkwalk.SymlinkWalk.resolve_path().
+    '''
+    def is_broken_link(self) -> bool:
+        return True

@@ -7,7 +7,7 @@ latter form, enter `path/to/symlinkwalk.py --help` for more info.
 '''
 
 
-from support.pathref import PathRef
+from support.pathref import PathRef, MissingPath, BrokenLink
 
 from argparse import ArgumentParser
 from collections.abc import Callable, Iterator
@@ -107,18 +107,19 @@ class SymlinkWalk:
     @classmethod
     def resolve_path(
         cls, pathRef: PathRef, expand_user: bool = False
-    ) -> tuple[PathRef, bool]:
+    ) -> PathRef:
         '''
         Args:
             pathRef: an absolute or relative path
 
-        Returns: tuple containing the fields:
-            PathRef: result path derived from input pathRef
-            bool: flag indicating whether path item was found?
-                If True, the result path should be the absolute path to an
-                existing item with all symlinks along the way resolved.
-                If False, the return path essentially indicates how far the
-                algorithm got before encountering a missing path element.
+        Returns: PathRef derived from input pathRef
+            Note that this may be a BrokenLink or MissingPath subclass of
+            PathRef. You can is_broken_link() and exists() to check for this.
+            In the case of a broken link, the path will be to the symlink
+            itself rather than what it is pointing to. If it is an
+            otherwise-nonexistent object, the path will be to where it should
+            go, so that you can then make the file and/or directories if
+            appropriate.
         '''
         if expand_user:
             pathRef = PathRef(pathRef.path.expanduser())
@@ -132,9 +133,9 @@ class SymlinkWalk:
                 map(_PathElem, reversed(pathRef.path.parts))
             )
         try:
-            return next(slw._scan(newPath)), True
+            return next(slw._scan(newPath))
         except StopIteration:
-            return next(iter(slw.missing)), False
+            return next(iter(slw.missing))
 
     def iter_dir(
         self, pathRef: PathRef, resolved: bool = False
@@ -142,8 +143,8 @@ class SymlinkWalk:
         if resolved:
             target = pathRef
         else:
-            target, found = self.resolve_path(pathRef)
-            if not found:
+            target = self.resolve_path(pathRef)
+            if not target.exists():
                 return
         self._yield_fn = self._yield_path
         yield from self._yield_contents(target)
@@ -154,8 +155,8 @@ class SymlinkWalk:
         if resolved:
             target = pathRef
         else:
-            target, found = self.resolve_path(pathRef)
-            if not found:
+            target = self.resolve_path(pathRef)
+            if not target.exists():
                 return
         self._yield_fn = self._yield_contents
         yield from self._yield_contents(target)
@@ -197,10 +198,14 @@ class SymlinkWalk:
                     yield from self._scan(pathRef)
                 else:
                     yield from self._yield_fn(pathRef)
-            elif self._elem_stack and self._elem_stack[-1].in_link:
-                self.missing.add(self._symlinks[-1])
             else:
-                self.missing.add(pathRef)
+                if self._elem_stack and self._elem_stack[-1].in_link:
+                    self.missing.add(BrokenLink(self._symlinks[-1].ref))
+                else:
+                    self.missing.add(MissingPath(
+                        pathRef.path.joinpath(*reversed(self._elem_stack))
+                    ))
+                self._elem_stack.clear()
         finally:
             if symlink:
                 self._symlinks.pop()
@@ -241,15 +246,14 @@ def _parse_command_line():
             or walk entire directory trees. In any case, each line printed to
             stdout is composed of a code, a space, and an absolute path. The
             codes are mostly only a single character. They include: 'f' = file,
-            'd' = directory, 'm' = missing item, 'x' = excluded path, and 'u#'
-            = unique path encountered # times (where # > 1). 'f' is essentially
-            anything that is not a directory, and can include devices, etc. 'm'
-            may signify a broken symlink, in which case the symlink's path
-            (rather than what it points to) is printed.
+            'd' = directory, 'm' = missing item, 'b' = broken symlink, 'x' =
+            excluded path, and 'u#' = unique path encountered # times (where #
+            > 1). 'f' is essentially anything that is not a directory, and can
+            include devices, etc.
             '''
     )
     ap.add_argument(
-        "targets", metavar="TARGET", nargs="*",
+        'targets', metavar='TARGET', nargs='*',
         help='''
             You can specify one or more target files or directories. A file
             will have its absolute path resolved if possible. A directory will
@@ -259,7 +263,7 @@ def _parse_command_line():
             '''
     )
     ap.add_argument(
-        "-r", "--resolve", default="tree",
+        '-r', '--resolve', default='tree',
         help='''
             There are 3 resolve modes you can access with this script.
             'path' prints a single line per target containing a fully resolved
@@ -271,7 +275,7 @@ def _parse_command_line():
             everything it can find.'''
     )
     ap.add_argument(
-        "-x", "--exclude", action="append",
+        '-x', '--exclude', action='append',
         help='''
             A glob-style (a.k.a. fnmatch) pattern you may use to exclude
             exploring certain paths. Matched paths still appear, but with the
@@ -280,7 +284,7 @@ def _parse_command_line():
             '''
     )
     ap.add_argument(
-        "-u", "--unique-paths", action="store_true",
+        '-u', '--unique-paths', action='store_true',
         help='''
             Despite the fact that this script prevents symlink recursion, it is
             still possible for the same path to appear more than once in a
@@ -306,11 +310,11 @@ def _get_path_filter(patterns: list[str]) -> Callable[[PathRef], bool]:
 
 
 def _print_path(pr: PathRef):
-    code = "d" if pr.path_or_entry.is_dir() else "f"
+    code = 'd' if pr.path_or_entry.is_dir() else 'f'
     print(code, pr)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     args = _parse_command_line()
     try:
         targets = [PathRef(p) for p in args.targets] if args.targets \
@@ -318,21 +322,25 @@ if __name__ == "__main__":
         for target in targets:
             path_filter = _get_path_filter(args.exclude)
             if args.resolve == 'path':
-                pr, found = SymlinkWalk.resolve_path(target)
-                if found:
+                pr = SymlinkWalk.resolve_path(target)
+                if pr.exist():
                     _print_path(pr)
+                elif pr.is_broken_link():
+                    print('b', pr)
                 else:
-                    print("m", pr)
+                    print('m', pr)
             else:
                 with SymlinkWalk(
                     path_filter=path_filter, yield_unique=args.unique_paths
                 ) as slw:
                     if args.resolve == 'path':
-                        pr, found = slw.resolve_path(target)
-                        if found:
+                        pr = slw.resolve_path(target)
+                        if pr.exists():
                             _print_path(pr)
+                        elif pr.is_broken_link():
+                            print('b', pr)
                         else:
-                            print("m", pr)
+                            print('m', pr)
                     elif args.resolve == 'list':
                         for pr in slw.iter_dir(target):
                             _print_path(pr)
@@ -340,17 +348,20 @@ if __name__ == "__main__":
                         for pr in slw.iter_tree(target):
                             _print_path(pr)
                     for pr in sorted(slw.skipped):
-                        print("x", pr)
+                        print('x', pr)
                     for pr, n in sorted(
                         (pr, n) for pr, n in slw.path_hits.items() if n > 1
                     ):
-                        print(f"u{n}", pr)
+                        print(f'u{n}', pr)
                     for pr in sorted(slw.recursed):
-                        print("r", pr)
+                        print('r', pr)
                     for pr in sorted(slw.missing):
-                        print("m", pr)
+                        if pr.is_broken_link():
+                            print('b', pr)
+                        else:
+                            print('m', pr)
     except Exception as ex:
-        print("ERROR:", ex, file=sys.stderr)
+        print('ERROR:', ex, file=sys.stderr)
         if _g_debug:
             print_exc()
         sys.exit(1)
