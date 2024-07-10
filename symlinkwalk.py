@@ -346,6 +346,8 @@ if __name__ == '__main__':
                     (pr, n) for pr, n in slw.path_hits.items() if n > 1
                 ):
                     print(f'u{n}', pr)
+            for pr in slw.skipped:
+                print("x", pr)
             for pr in sorted(slw.bad_paths):
                 if pr.is_broken_link():
                     print('b', pr)
