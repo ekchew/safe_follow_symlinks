@@ -51,16 +51,15 @@ class SymlinkWalk:
             been scanned. This option would prevent such a double scan.
 
     Output attributes (those that provide you info after calling methods):
-        path_hits: a dict indicating counting unique path encounters
+        path_hits: a dict counting unique path encounters
             This is only updated when yield_unique is True.
         recursed: a set of all symlinks shown to recurse
             Note that recursive symlinks do get followed once before the
             recursion is stopped.
         missing: a set of all missing paths
-            This is intended to catch any broken symlinks. For these, the
-            symlink path itself is recorded rather than where it points.
-            If the path you are scanning does not itself exist, however, it may
-            also wind up here.
+            Any paths that cannot be fully resolved wind up here. You can call
+            is_broken_link() on any of these to check if they are symlinks that
+            point to nothing.
         skipped: a set of all paths skipped when path_filter() returned False
     '''
     path_filter: Callable[[PathRef], bool]
@@ -143,6 +142,7 @@ class SymlinkWalk:
         else:
             target = self.resolve_path(pathRef)
             if not target.exists():
+                self.missing.add(target)
                 return
         self._yield_fn = self._yield_path
         yield from self._yield_contents(target)
@@ -155,6 +155,7 @@ class SymlinkWalk:
         else:
             target = self.resolve_path(pathRef)
             if not target.exists():
+                self.missing.add(target)
                 return
         self._yield_fn = self._yield_contents
         yield from self._yield_contents(target)
@@ -325,7 +326,7 @@ if __name__ == '__main__':
             path_filter = _get_path_filter(args.exclude)
             if args.resolve == 'path':
                 pr = SymlinkWalk.resolve_path(target)
-                if pr.exist():
+                if pr.exists():
                     _print_path(pr)
                 elif pr.is_broken_link():
                     print('b', pr)
