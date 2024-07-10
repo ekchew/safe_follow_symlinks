@@ -7,7 +7,7 @@ latter form, enter `path/to/symlinkwalk.py --help` for more info.
 '''
 
 
-from support.pathref import PathRef, MissingPath, BrokenLink
+from support.pathref import PathRef, MissingPath, BrokenLink, RecursiveLink
 
 from argparse import ArgumentParser
 from collections.abc import Callable, Iterator
@@ -53,21 +53,16 @@ class SymlinkWalk:
     Output attributes (those that provide you info after calling methods):
         path_hits: a dict counting unique path encounters
             This is only updated when yield_unique is True.
-        recursed: a set of all symlinks shown to recurse
-            Note that recursive symlinks do get followed once before the
-            recursion is stopped.
-        missing: a set of all missing paths
-            Any paths that cannot be fully resolved wind up here. You can call
-            is_broken_link() on any of these to check if they are symlinks that
-            point to nothing.
+        bad_paths: set of all problematic paths
+            These include missing paths, broken symlinks, and recursive
+            symlinks. The
         skipped: a set of all paths skipped when path_filter() returned False
     '''
     path_filter: Callable[[PathRef], bool]
     yield_unique: bool
 
     path_hits: dict[PathRef, int]
-    recursed: set[PathRef]
-    missing: set[PathRef]
+    bad_paths: set[PathRef]
     skipped: set[PathRef]
 
     _symlinks: list[PathRef] = field(repr=_g_debug)
@@ -81,8 +76,7 @@ class SymlinkWalk:
         self.path_filter = path_filter if path_filter else self.allow_all_paths
         self.yield_unique = yield_unique
         self.path_hits = {}
-        self.missing = set()
-        self.recursed = set()
+        self.bad_paths = set()
         self.skipped = set()
         self._symlinks = []
         self._elem_stack = []
@@ -110,13 +104,17 @@ class SymlinkWalk:
             pathRef: an absolute or relative path
 
         Returns: PathRef derived from input pathRef
-            Note that this may be a BrokenLink or MissingPath subclass of
-            PathRef. You can is_broken_link() and exists() to check for this.
-            In the case of a broken link, the path will be to the symlink
-            itself rather than what it is pointing to. If it is an
-            otherwise-nonexistent object, the path will be to where it should
-            go, so that you can then make the file and/or directories if
-            appropriate.
+            Note that this may be a subclass of PathRef (MissingPath,
+            BrokenLink, or RecursiveLink) if anything went wrong during path
+            resolution. You can call methods like bad_link() or exists() to
+            check this is the case.
+
+            In the case of a bad link, the path will be to the symlink
+            itself rather than whatever it is pointing to.
+
+            If it is an otherwise-nonexistent object, the path will be to where
+            it should go, so that you can then complete the path with a new
+            file and/or directories if appropriate.
         '''
         if expand_user:
             pathRef = PathRef(pathRef.path.expanduser())
@@ -132,7 +130,7 @@ class SymlinkWalk:
         try:
             return next(slw._scan(newPath))
         except StopIteration:
-            return next(iter(slw.missing))
+            return next(iter(slw.bad_paths))
 
     def iter_dir(
         self, pathRef: PathRef, resolved: bool = False
@@ -142,7 +140,7 @@ class SymlinkWalk:
         else:
             target = self.resolve_path(pathRef)
             if not target.exists():
-                self.missing.add(target)
+                self.bad_paths.add(target)
                 return
         self._yield_fn = self._yield_path
         yield from self._yield_contents(target)
@@ -232,8 +230,7 @@ class SymlinkWalk:
 
     def reset(self):
         self.path_hits.clear()
-        self.missing.clear()
-        self.recursed.clear()
+        self.bad_paths.clear()
         self.skipped.clear()
         self._symlinks.clear()
         self._elem_stack.clear()
@@ -246,23 +243,18 @@ def _parse_command_line():
             This script lets you follow symlinks without having to worry about
             infinite recursion. You can use it to resolve a single path, list
             all items in a directory (with any symlink items fully resolved),
-            or walk entire directory trees. In any case, each line printed to
-            stdout is composed of a code, a space, and an absolute path. The
-            codes are mostly only a single character. They include: 'f' = file,
-            'd' = directory, 'm' = missing item, 'b' = broken symlink, 'x' =
-            excluded path, and 'u#' = unique path encountered # times (where #
-            > 1). 'f' is essentially anything that is not a directory, and can
-            include devices, etc.
+            or walk entire directory trees. It prints one line per path to
+            stdout preceeded by a code such as 'f' for file or 'd' for
+            directory. See the README.md file for a full list of possible codes
+            and what they mean.
             '''
     )
     ap.add_argument(
         'targets', metavar='TARGET', nargs='*',
         help='''
-            You can specify one or more target files or directories. A file
-            will have its absolute path resolved if possible. A directory will
-            have its entire content tree listed, given the default operating
-            mode (see --resolve for more options). If you specify no targets,
-            the current working directory will be the target.
+            You can specify one or more target files or directories. If you
+            specify no targets, the current working directory will be the
+            default target.
             '''
     )
     ap.add_argument(
@@ -270,10 +262,7 @@ def _parse_command_line():
         help='''
             There are 3 resolve modes you can access with this script.
             'path' prints a single line per target containing a fully resolved
-            path where possible. It should be marked either 'f' or 'd' if it
-            exists. If not, it will be marked 'm' and the printed path will
-            indicate how far it had been resolved before a missing element was
-            encountered. 'list' mode lists the immediate member of a directory
+            path where possible. 'list' mode lists the immediate member of a directory
             target. 'tree' mode walks the entire directory tree and prints
             everything it can find.'''
     )

@@ -101,6 +101,31 @@ class PathRef:
         '''
         return False
 
+    def is_recursive_link(self) -> bool:
+        '''
+        Returns: True if the path is a symlink found to recurse on itself
+            A False return value does not necessarily mean it is NOT recursive,
+            however. (The True value is returned by a subclass.)
+        '''
+        return False
+
+    def is_bad_link(self) -> bool:
+        '''
+        This method simply combines calls to is_broken_link() and
+        is_recursive_link(), returning True if either returns True.
+        '''
+        return self.is_broken_link() or self.is_recursive_link()
+
+    def is_bad_path(self) -> bool:
+        '''
+        This method returns True if the path is known to be a bad link or not
+        exist.
+        '''
+        #   Note: we need not call is_broken_link() in this case since
+        #   BrokenLink subclasses MissingPath. Checking if self.exists()
+        #   returns False should suffice.
+        return self.is_recursive_link() or not self.exists()
+
 
 class MissingPath(PathRef):
     '''
@@ -113,8 +138,21 @@ class MissingPath(PathRef):
 
 class BrokenLink(MissingPath):
     '''
-    A subclass of MissingPath in which is_broken_link() returns True. This may
-    also be returned by symlinkwalk.SymlinkWalk.resolve_path().
+    A subclass of MissingPath in which is_broken_link() returns True.
+
+    (Technically, the symlink file itself does exist in this case, but since
+    the convention in terms of Standard Library APIs seems to be that exists()
+    methods should return False for broken symlinks, BrokenLink adheres to this
+    principle.)
     '''
     def is_broken_link(self) -> bool:
+        return True
+
+
+class RecursiveLink(PathRef):
+    '''
+    A subclass of PathRef in which the is_recursive_link() method always
+    returns True.
+    '''
+    def is_recursive_link(self) -> bool:
         return True
