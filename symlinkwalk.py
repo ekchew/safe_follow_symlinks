@@ -260,11 +260,11 @@ def _parse_command_line():
     ap.add_argument(
         '-r', '--resolve', default='tree',
         help='''
-            There are 3 resolve modes you can access with this script.
-            'path' prints a single line per target containing a fully resolved
-            path where possible. 'list' mode lists the immediate member of a directory
-            target. 'tree' mode walks the entire directory tree and prints
-            everything it can find.'''
+            There are 3 resolve modes you can access with this script. 'path'
+            prints a single line per target containing a fully resolved path
+            where possible. 'list' mode lists the immediate members of a
+            directory target. 'tree' mode walks the entire directory tree and
+            prints everything it can find.'''
     )
     ap.add_argument(
         '-x', '--exclude', action='append',
@@ -309,31 +309,31 @@ def _print_path(pr: PathRef):
 if __name__ == '__main__':
     args = _parse_command_line()
     try:
+        path_filter = _get_path_filter(args.exclude)
+        slw = SymlinkWalk(
+            path_filter=path_filter, yield_unique=args.unique_paths
+        )
         targets = [PathRef(p) for p in args.targets] if args.targets \
             else [PathRef()]
-        for target in targets:
-            path_filter = _get_path_filter(args.exclude)
-            if args.resolve == 'path':
+        if args.resolve == 'path':
+            for target in targets:
                 pr = SymlinkWalk.resolve_path(target)
-                if pr.exists():
-                    _print_path(pr)
-                elif pr.is_broken_link():
+                if pr.is_broken_link():
                     print('b', pr)
+                elif pr.is_recursive_link():
+                    print('r', pr)
+                elif pr.exists():
+                    _print_path(pr)
                 else:
                     print('m', pr)
-            else:
-                with SymlinkWalk(
-                    path_filter=path_filter, yield_unique=args.unique_paths
-                ) as slw:
-                    if args.resolve == 'path':
-                        pr = slw.resolve_path(target)
-                        if pr.exists():
-                            _print_path(pr)
-                        elif pr.is_broken_link():
-                            print('b', pr)
-                        else:
-                            print('m', pr)
-                    elif args.resolve == 'list':
+        else:
+            for target in targets:
+                if args.resolve == 'path':
+                    pr = SymlinkWalk.resolve_path(target)
+                    if pr.exists():
+                        _print_path(pr)
+                else:
+                    if args.resolve == 'list':
                         for pr in slw.iter_dir(target):
                             _print_path(pr)
                     else:
@@ -341,18 +341,18 @@ if __name__ == '__main__':
                             _print_path(pr)
                     for pr in sorted(slw.skipped):
                         print('x', pr)
-                    if args.unique_paths:
-                        for pr, n in sorted(
-                            (pr, n) for pr, n in slw.path_hits.items() if n > 1
-                        ):
-                            print(f'u{n}', pr)
-                    for pr in sorted(slw.recursed):
-                        print('r', pr)
-                    for pr in sorted(slw.missing):
-                        if pr.is_broken_link():
-                            print('b', pr)
-                        else:
-                            print('m', pr)
+            if args.unique_paths:
+                for pr, n in sorted(
+                    (pr, n) for pr, n in slw.path_hits.items() if n > 1
+                ):
+                    print(f'u{n}', pr)
+            for pr in sorted(slw.bad_paths):
+                if pr.is_broken_link():
+                    print('b', pr)
+                elif pr.is_recursive_link():
+                    print('r', pr)
+                else:
+                    print('m', pr)
     except Exception as ex:
         print('ERROR:', ex, file=sys.stderr)
         if _g_debug:
