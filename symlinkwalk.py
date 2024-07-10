@@ -48,13 +48,11 @@ class SymlinkWalk:
             into itself, it does not go so far as to prevent the same path from
             being yielded multiple times, particularly by iter_tree(). For
             example, a symlink may point back to a directory that had already
-            been scanned. You can prevent such a double-scan, though you may
-            not always want to do so?
+            been scanned. This option would prevent such a double scan.
 
     Output attributes (those that provide you info after calling methods):
-        path_hits: a dict indicating how often unique paths were encountered
-            This may be helpful if you set yield_unique True but still want to
-            know which paths were encountered multiple times?
+        path_hits: a dict indicating counting unique path encounters
+            This is only updated when yield_unique is True.
         recursed: a set of all symlinks shown to recurse
             Note that recursive symlinks do get followed once before the
             recursion is stopped.
@@ -167,13 +165,24 @@ class SymlinkWalk:
 
         if not self.path_filter(pathRef):
             self.skipped.add(pathRef)
+            self._elem_stack.clear()
             return
+
+        if self.yield_unique:
+            try:
+                self.path_hits[pathRef] += 1
+            except KeyError:
+                self.path_hits[pathRef] = 1
+            else:
+                self._elem_stack.clear()
+                return
 
         symlink: bool = False
         try:
             if pathRef.path_or_entry.is_symlink():
                 if pathRef in self._symlinks:
                     self.recursed.add(pathRef)
+                    self._elem_stack.clear()
                     return
                 self._symlinks.append(pathRef)
                 symlink = pathRef
@@ -211,17 +220,10 @@ class SymlinkWalk:
                 self._symlinks.pop()
 
     def _yield_path(self, pathRef: PathRef) -> Iterator[PathRef]:
-        try:
-            self.path_hits[pathRef] += 1
-        except KeyError:
-            self.path_hits[pathRef] = 1
-            yield pathRef
-        else:
-            if not self.yield_unique:
-                yield pathRef
+        yield pathRef
 
     def _yield_contents(self, pathRef: PathRef) -> Iterator[PathRef]:
-        yield from self._yield_path(pathRef)
+        yield pathRef
         if pathRef.path_or_entry.is_dir():
             with os.scandir(pathRef) as sd:
                 for entry in sd:
@@ -289,8 +291,8 @@ def _parse_command_line():
             Despite the fact that this script prevents symlink recursion, it is
             still possible for the same path to appear more than once in a
             listing. You can use the --unique-paths option to prevent listing
-            any path twice as an 'f' or 'd' record. You can still check all
-            paths that appeared more than once by looking at the 'u#' lines.
+            any path twice as an 'f' or 'd' record. You can still check which
+            appeared more than once by looking for 'u#' lines in the output.
             '''
     )
 
@@ -349,10 +351,11 @@ if __name__ == '__main__':
                             _print_path(pr)
                     for pr in sorted(slw.skipped):
                         print('x', pr)
-                    for pr, n in sorted(
-                        (pr, n) for pr, n in slw.path_hits.items() if n > 1
-                    ):
-                        print(f'u{n}', pr)
+                    if args.unique_paths:
+                        for pr, n in sorted(
+                            (pr, n) for pr, n in slw.path_hits.items() if n > 1
+                        ):
+                            print(f'u{n}', pr)
                     for pr in sorted(slw.recursed):
                         print('r', pr)
                     for pr in sorted(slw.missing):
