@@ -79,7 +79,7 @@ symlinks.
 * `TARGET`
   * zero or more target paths
   * these may be either absolute or relative to the current working directory
-  * defaults to the current working directory is no targets supplied
+  * defaults to the current working directory if no targets supplied
 * `-r MODE` or `--resolve=MODE`
   * `MODE` = one of `path`, `list`, or `tree` as described earlier
   * defaults to `tree`
@@ -190,7 +190,7 @@ version of your input with all symlinks resolved where possible.
     if pr.is_bad_path():
         print(f'there is a problem with the path:', pr)
 
-It is a good idea to call some of those `PathRec` methods on the result to make
+It is a good idea to call some of those `PathRef` methods on the result to make
 sure nothing went wrong during path resolution. Alternatively, you can use the
 `strict=True` option to have it raise an exception in that case.
 
@@ -201,7 +201,7 @@ form, provided:
 
 1. The path is not rejected by your custom `path_filter`.
 2. The path can, if fact, be properly resolved to an existing object.
-3. If attribute `yield_unique=True` and the path has already been yielded.
+3. If attribute `yield_unique=False` or the path has not already been yielded.
 
 Failing any of these, the output `skipped`, `bad_paths`, and `path_hits`
 attributes will be updated with the rejected paths, respectively.
