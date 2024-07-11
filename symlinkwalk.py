@@ -14,7 +14,7 @@ from support.pathref import PathRef, MissingPath, BrokenLink, RecursiveLink
 
 from argparse import ArgumentParser
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import astuple, dataclass, field
 from shlex import quote
 from traceback import print_exc
 import fnmatch
@@ -45,6 +45,10 @@ class RecursiveLinkError(RuntimeError):
 class _PathElem:
     part: str
     in_link: bool = False
+
+
+class _InLinkPath(PathRef):
+    pass
 
 
 @dataclass(init=False)
@@ -316,12 +320,14 @@ class SymlinkWalk:
 
             if pathRef.exists():
                 if self._elem_stack:
-                    pathRef = PathRef(pathRef.path/self._elem_stack.pop().part)
-                    yield from self._scan(pathRef)
+                    part, in_link = astuple(self._elem_stack.pop())
+                    subPath = _InLinkPath(pathRef.path/part) if in_link \
+                        else PathRef(pathRef.path/part)
+                    yield from self._scan(subPath)
                 else:
                     yield from self._yield_fn(pathRef)
             else:
-                if self._elem_stack and self._elem_stack[-1].in_link:
+                if isinstance(pathRef, _InLinkPath):
                     self.bad_paths.add(BrokenLink(self._symlinks[-1].ref))
                 else:
                     self.bad_paths.add(MissingPath(
