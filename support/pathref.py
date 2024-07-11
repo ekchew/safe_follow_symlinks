@@ -15,13 +15,17 @@ class PathRef:
 
     PathRefs can also be sorted and used as keys in sets or dicts.
 
-    Attributes:
+    Class Attributes:
+        g_encoding: encoding used to render a bytes path as str
+            Defaults to 'utf-8'
+
+    Instance Attributes:
         ref: a path in bytes, str, pathlib.PurePath, or os.DirEntry form
             Defaults to Path.cwd().
-        encoding: encoding used to convert bytes form of ref into a str
-            Defaults to 'utf-8'.
     '''
-    __slots__ = ['ref', 'encoding']
+    __slots__ = ['ref']
+
+    g_encoding = 'utf-8'
 
     @property
     def path(self) -> PurePath:
@@ -48,11 +52,9 @@ class PathRef:
         return self.ref if ready else Path(self.ref)
 
     def __init__(
-        self, ref: bytes | str | Path | os.DirEntry | None = None,
-        encoding: str = 'utf-8'
+        self, ref: bytes | str | Path | os.DirEntry | None = None
     ):
         self.ref = Path.cwd() if ref is None else ref
-        self.encoding = encoding
 
     def __str__(self) -> str:
         s: str
@@ -64,7 +66,7 @@ class PathRef:
                 sb = self.ref.path
             else:
                 sb = self.ref
-            s = sb if isinstance(sb, str) else sb.decode(self.encoding)
+            s = sb if isinstance(sb, str) else sb.decode(self.g_encoding)
         return s
 
     def __repr__(self) -> str:
