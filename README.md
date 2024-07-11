@@ -1,28 +1,33 @@
-Safe-Follow Symbolic Links
-==========================
+Safely Follow Symbolic Links
+============================
 
-This is a Python package to help follow symlinks without falling into infinite
-recursion. You can resolve individual paths, list directories (with any member
-symlinks fully resolved), or walk entire directory trees.
+Many tools that scan directory trees offer an option to follow symbolic links,
+but with the caveat that the tool may get stuck in infinite recursion should a
+link loop back on itself.
 
-Its `symlinkwalk.py` script can optionally be run as a command line tool.
+The `symlinkwalk.py` script in this Python 3 package walks directory trees
+while detecting and preventing symlink recursion. It can either be run as a
+command line tool or imported as a module into your Python project.
+
+It can also be run in a simpler mode to resolve a single path or list only the
+immediate members of a directory.
 
 Requirements
 ------------
 
 Python 3.10 or later.
 
-The package has no dependencies beyond the Standard Library.
+The package has no dependencies beyond the Python Standard Library.
 
 `symlinkwalk.py` Executable Script
 ----------------------------------
 
 Basic usage of the command line script would look something like this:
 
-    > python3 symlinkwalk.py -r path foo
+    > python3 symlinkwalk.py --resolve=path foo
     d /full/path/to/foo
 
-The `-r` option (short for `--resolve`) lets you set resolving mode to one of:
+The `--resolve` (or `-r`) option lets you set resolving mode to one of:
 
 * `path`
   * prints the absolute path to `foo` with any symlinks resolved
@@ -31,51 +36,70 @@ The `-r` option (short for `--resolve`) lets you set resolving mode to one of:
   * all member paths will be absolute and fully resolved
 * `tree` (the default)
   * prints the entire directory tree rooted at `foo`
-  * uses a depth-first traversal
+  * follows a depth-first traversal order
 
 ### Output Format
 
-Each path printed to the standard output is prefixed with a code followed by a
-space. This code may be one of:
+Each line printed to the standard output consists of a code, a single space,
+and an absolute path. This code may be one of:
 
-* `d`: path indicates an existing directory
-* `f`: path indicates an existing non-directory
-  * while most likely a file, it could be something more exotic (e.g. a device)
-* `m`: file system object is missing at path
-  * `foo` apparently does not exist
+* `d`: path is to an existing directory
+* `f`: path is to an existing non-directory
+* `m`: path is to a missing object
 * `b`: path is to a broken symlink
-  * whatever the symlink initially referenced no longer exists
-  * say `foo` was a symlink and you asked to resolve `foo/bar`
-    * if `foo` is broken, you will see `b /path/to/foo`
-    * in other words, anything past the broken symlink is discarded
-* `r`: path is a recursing symlink
-  * wherever the link goes eventually winds up at the link itself
-* `x`: path was exclude by an `--exclude` pattern
-* `u#`: the same unique path was encountered multiple times
-  * here, `#` is the number of times it was encountered ≥ 2
-  * such entries only appear when `--unique-paths` is specified
+* `r`: path is to a recursive symlink
+* `x`: path was excluded by an `--exclude` pattern
+* `u#`: the same unique path was `#` times, where `#` ≥ 2
 
-Note that in the current implementation, for each target path, the entries are
-printed in the following order:
+`d` and `f` lines are printed as the item is encountered, while the rest of the
+codes are gathered and printed at the end. While an `f` path would most likely
+be to a file (hence the "f"), it could potentially be something more exotic,
+such as a device or fifo.
 
-* all `d` or `f` entries
-* all `b` entries
+An `m` path, while missing at some level, is a path you ought to be able to
+complete as say a directory using `mkdir -p /path/to/missing/foo`.
 
-### Target Path Arguments
+The same cannot be said for `b` or `r` paths. In `--resolve=path` mode, if a
+broken/recursive symlink is encountered anywhere along the path you supply, the
+printed path will be an absolute path to the symlink itself with anything
+beyond it discarded. For example, say your path was `foo/bar/baz`, of which
+`foo` turned out to be a broken symlink. The output would be something like `b
+/path/to/broken/foo`. This is the path of concern you need to address, and the
+`bar/baz` part becomes superfluous at this point.
 
-You can supply more than one of these. Note, however, that this is essentially
-equivalent to running the script multiple times with a single target each time.
-For example, even with `--unique-paths`, you may see the same path appear from
-walking different targets.
+Regarding `r` paths, symlink recursion is only detected after the symlink is
+followed once. If the path walk eventually circles back to the same symlink,
+it will be flagged as recursive with the `r` code. If there are several
+symlinks forming a loop, only one of them may get flagged, but that should be
+enough to stop the infinite recursion. The point, though, is that you should be
+aware that the algorithm may not exhaustively identify *all* recursive
+symlinks.
 
-If you supply no paths, the current working directory will be chosen as the
-target.
+### Command Line
 
-### As A Module
+    path/to/symlinkwalk.py [-h] [-r MODE] [-x PATTERN] [-u] [TARGET ...]
 
-It can be imported into a Python project or run as a command line script.
+* `TARGET`
+  * zero or more target paths
+  * these may be either absolute or relative to the current working directory
+  * defaults to the current working directory is not targets supplied
+* `-r MODE` or `--resolve=MODE`
+  * `MODE` = one of `path`, `list`, or `tree` as described earlier
+  * defaults to `tree`
+* `-x PATTERN` or `--exclude=PATTERN`
+  * `PATTERN` = a glob pattern that can be used to exclude certain paths
+  * you may specify multiple `-x` arguments
+* `-u` or `--unique-paths`
+  * normally, the same path may appear multiple times in a listing
+  * this may happen if you provide multiple targets that overlap
+  * it may also happen if multiple symlinks direct to the same location
+  * `-u` should prevent such paths appearing in `f` or `d` lines more than once
+  * you can still screen for `u#` lines to see which would have done so
 
-As an imported module, the functionality is implemented in the
+`symlinkwalk` Module
+--------------------
+
+When imported as a module, the functionality is implemented in
 `class SymlinkWalk` together with the support classes for managing paths in
 `support/pathref`. For more info, access the `pydoc`:
 
@@ -83,10 +107,6 @@ As an imported module, the functionality is implemented in the
     python3 -m pydoc support/pathref.py
 
 Alternatively, you can enter `python3 -m pydoc -b` to get the web server going.
-
-For command line info, enter:
-
-    python3 symlinkwalk.py --help
 
 `support/pathref` Module
 ------------------------
