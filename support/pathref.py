@@ -1,3 +1,10 @@
+'''
+This module defines the PathRef class, along with a number of subclasses that
+may be instantiated by symlinkwalk methods under certain circumstances.
+
+symlinkwalk uses PathRef exclusively when dealing with paths.
+'''
+
 from __future__ import annotations
 
 from pathlib import Path, PurePath
@@ -10,14 +17,14 @@ class PathRef:
     Library, and this wrapper class attempts to unify the more common among
     them.
 
-    PathRef is a path-like class (i.e. satisfies os.PathLike), and can
+    PathRef is a path-like class (i.e. it satisfies os.PathLike), and can
     therefore be used with most path-oriented APIs in the os module.
 
     PathRefs can also be sorted and used as keys in sets or dicts.
 
     Class Attributes:
         g_encoding: encoding used to render a bytes path as str
-            Defaults to 'utf-8'
+            Defaults to 'utf-8'.
 
     Instance Attributes:
         ref: a path in bytes, str, pathlib.PurePath, or os.DirEntry form
@@ -31,10 +38,11 @@ class PathRef:
     def path(self) -> PurePath:
         '''
         Returns: ref attribute as a pathlib.Path
-            If ref is something other than a Path already, the returned
-            value will be a pathlib.Path. (This presumes you are managing paths
-            in the native environment. If you want to manage Windows paths from
-            a POSIX system or vice versa, you may want to avoid this property.)
+            (This assumes you are working with paths in your native
+            envirnoment, which would almost certainly be the case when working
+            together with symlinkwalk. If you are, for some reason, managing
+            Windows paths from a POSIX system or vice versa, you will probably
+            want to avoid this property.)
         '''
         return self.ref if isinstance(self.ref, Path) else Path(
             self.ref.path if isinstance(self.ref, os.DirEntry) else self.ref

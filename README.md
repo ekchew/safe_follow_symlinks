@@ -210,10 +210,12 @@ Let's say you wanted to implement your own recursive directory tree-walking
 using `iter_dir()`. It might look something like this:
 
     def print_dir(dirPathRef, symLinkWalk, resolved=False):
+        print(dirPathRef)
         for pr in symLinkWalk.iter_dir(dirPathRef, resolved):
-            print(pr)
             if pr.path_or_entry.is_dir():
                 print_dir(pr, symLinkWalk, resolved=True)
+            else:
+                print(pr)
 
     print_dir(PathRef('foo'))
 

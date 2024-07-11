@@ -2,8 +2,11 @@
 
 
 '''
-This is both an importable module and a command-line script. To use it in the
-latter form, enter `path/to/symlinkwalk.py --help` for more info.
+symlinkwalk is a module built around the SymlinkWalk class.
+
+The symlinkwalk.py script can also be run as a command line tool.
+For more help on this, consult the README.md file or enter
+`path/to/symlinkwalk.py --help`.
 '''
 
 
@@ -25,11 +28,17 @@ _g_debug: bool = True
 
 
 class BrokenLinkError(FileNotFoundError):
-    pass
+    '''
+    An exception that may be raised by `SymlinkWalk.resolve_path()` with
+    `strict=True`.
+    '''
 
 
 class RecursiveLinkError(RuntimeError):
-    pass
+    '''
+    An exception that may be raised by `SymlinkWalk.resolve_path()` with
+    `strict=True`.
+    '''
 
 
 @dataclass(slots=True)
@@ -43,25 +52,35 @@ class SymlinkWalk:
     '''
     This class offers a number of methods for resolving paths and walking
     directories safely while following symlinks. It manages any state needed by
-    the recursive algorithms and reports problem paths through public
+    the recursive algorithms and reports problem paths through output
     attributes.
 
-    Input attributes (those you may wish to supply):
+    It can optionally be instantiated as context manager. The reason for this
+    is that instances can carry a lot of state, and reset() is automatically
+    called on exiting the context to clear the various container attributes.
+
+    Once you have instantiated a SymlinkWalk, you can call one of the generator
+    methods: iter_dir() or iter_tree().
+
+    There is also resolve_path(), which does not require an instance since it
+    is a class method. (It does allocate a temporary one internally.)
+
+    Input attributes (those you may wish to supply at instantiation or later):
         path_filter: a callback to control which paths get scanned
-            The filter should return True to accept the path or False to skip
+            The filter should return `True` to accept the path or False to skip
             it. The filter is called on every file, directory, and even
-            partially resolved symlink paths. You can save iter_tree() a lot
+            partially resolved symlink paths. You can save `iter_tree()` a lot
             of work by not drilling down into uninteresting directories.
         yield_unique: never yield the same path twice? (default=False)
             While the algorithm stops any attempt by a symlink to recurse back
             into itself, it does not go so far as to prevent the same path from
-            being yielded multiple times, particularly by iter_tree(). For
+            being yielded multiple times, particularly by `iter_tree()`. For
             example, a symlink may point back to a directory that had already
             been scanned. This option would prevent such a double scan.
 
-    Output attributes (those that provide you info after calling methods):
+    Output attributes (providing info after calling iterative methods):
         path_hits: a dict counting unique path encounters
-            This is only updated when yield_unique is True.
+            This is only updated when `yield_unique=True`.
         bad_paths: set of all problematic paths
             These include missing paths, broken symlinks, and recursive
             symlinks. The
@@ -109,11 +128,14 @@ class SymlinkWalk:
         cls, pathRef: PathRef, expand_user: bool = True, strict: bool = False
     ) -> PathRef:
         '''
+        This is a class method which resolves a single path and any symlinks it
+        contains where possible.
+
         Args:
             pathRef: an absolute or relative path
             expand_user: expands '~' and '~user' sequences within paths
                 Defaults to True.
-            strict: raise exception on bad path? (defauts to False)
+            strict: raise exception on bad path? (defaults to False)
                 This may be one of:
                     FileNotFoundError: path does not exist
                     BrokenLinkError: symlinked path does not exist
@@ -121,18 +143,18 @@ class SymlinkWalk:
                         subclass.
                     RecursiveLinkError: symlink found to be recursive
 
-        Returns: PathRef derived from input pathRef
+        Returns: PathRef derived from input PathRef
             Note that this may be a subclass of PathRef (MissingPath,
             BrokenLink, or RecursiveLink) if anything went wrong during path
-            resolution. You can call methods like bad_link() or exists() to
-            check this is the case.
+            resolution. You can call methods like is_bad_link() or exists() to
+            check if this is the case.
 
             In the case of a bad link, the path will be to the symlink
             itself rather than whatever it is pointing to.
 
             If it is an otherwise-nonexistent object, the path will be to where
-            it should go, so that you can then complete the path with a new
-            file and/or directories if appropriate.
+            it should go, so that you can then complete the path with new
+            file/directory elements if appropriate.
         '''
         if expand_user:
             pathRef = PathRef(pathRef.path.expanduser())
@@ -169,6 +191,45 @@ class SymlinkWalk:
         self, pathRef: PathRef, resolved: bool = False,
         expand_user: bool = True
     ) -> Iterator[PathRef]:
+        '''
+        This is a generator that yields a PathRef for each path in the input
+        directory, provided the path is not:
+
+            1. excluded by the path_filter
+            2. bad (i.e. non-existent or a broken/recursive symlink)
+            3. another hit on the same path in yield_unique mode
+
+        Failing 1, the skipped attr is assigned the excluded path.
+        Failing 2, the bad_path attr is assigned the bad path.
+        Failing 3, the hit count for the path_hits entry is incremented.
+
+        (Note: In yield_unique mode, all unique paths wind up in path_hits with
+        at least a single hit. Otherwise, the dict is left unmodified.)
+
+        It is important to note that SymlinkWalk's internal state is updated by
+        this generator, but nothing gets reset beforehand. The idea is that you
+        may well be calling it from a recursive function that is walking the
+        directory tree manually rather than using iter_tree(). As such,
+        tracking symlink recursion should go on between iter_dir() calls by
+        default. If you want to start from a clean slate every time, either
+        call reset() or allocate a new SymlinkWalk instance.
+
+        Args:
+            pathRef: absolute or relative path to the directory to list
+            resolved: pathRef has already been resolved? (default=False)
+                If you are implementing your own directory tree walk, you may
+                want to set this to True when recursing into a subdirectory,
+                since everything leading up to the directory should already be
+                resolved at that point. It will save a lot of needless work.
+            expand_user: expand '~' and '~user' elements within pathRef?
+                this option will be ignored if resolved=True
+
+        Yields: PathRef
+            These should be "good" paths in that any problem ones should have
+            been diverted to bad_paths, etc. Note that a recursive symlink must
+            be followed once, however, before it can be discovered to be
+            recursive.
+        '''
         if resolved:
             target = pathRef
         else:
@@ -177,12 +238,22 @@ class SymlinkWalk:
                 self.bad_paths.add(target)
                 return
         self._yield_fn = self._yield_path
-        yield from self._yield_contents(target)
+        if pathRef.path_or_entry.is_dir():
+            with os.scandir(pathRef) as sd:
+                for entry in sd:
+                    yield from self._scan(PathRef(entry))
 
     def iter_tree(
         self, pathRef: PathRef, resolved: bool = False,
         expand_user: bool = True
     ) -> Iterator[PathRef]:
+        '''
+        iter_tree() works much like iter_dir() except that it recurses down
+        into subdirectories. It also yields all directory paths it encounters,
+        including the initial pathRef you supply.
+
+        It follows a depth-first traversal order.
+        '''
         if resolved:
             target = pathRef
         else:
