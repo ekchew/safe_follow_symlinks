@@ -30,13 +30,13 @@ class PathRef:
     @property
     def path(self) -> PurePath:
         '''
-        Returns: ref attribute as a pathlib.PurePath
-            If ref is something other than a PurePath already, the returned
-            value will be a pathlib.Path. This presumes you are managing paths
+        Returns: ref attribute as a pathlib.Path
+            If ref is something other than a Path already, the returned
+            value will be a pathlib.Path. (This presumes you are managing paths
             in the native environment. If you want to manage Windows paths from
-            a POSIX system or vice versa, you may want to avoid this property.
+            a POSIX system or vice versa, you may want to avoid this property.)
         '''
-        return self.ref if isinstance(self.ref, PurePath) else Path(
+        return self.ref if isinstance(self.ref, Path) else Path(
             self.ref.path if isinstance(self.ref, os.DirEntry) else self.ref
         )
 
