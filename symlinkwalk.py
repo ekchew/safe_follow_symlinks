@@ -12,6 +12,7 @@ from support.pathref import PathRef, MissingPath, BrokenLink, RecursiveLink
 from argparse import ArgumentParser
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from shlex import quote
 from traceback import print_exc
 import fnmatch
 import os
@@ -21,6 +22,14 @@ import sys
 #   Makes private SymlinkWalk attributes appear in repr() and prints a stack
 #   crawl when an exception is caught in command line mode.
 _g_debug: bool = True
+
+
+class BrokenLinkError(FileNotFoundError):
+    pass
+
+
+class RecursiveLinkError(RuntimeError):
+    pass
 
 
 @dataclass(slots=True)
@@ -97,11 +106,20 @@ class SymlinkWalk:
 
     @classmethod
     def resolve_path(
-        cls, pathRef: PathRef, expand_user: bool = False
+        cls, pathRef: PathRef, expand_user: bool = True, strict: bool = False
     ) -> PathRef:
         '''
         Args:
             pathRef: an absolute or relative path
+            expand_user: expands '~' and '~user' sequences within paths
+                Defaults to True.
+            strict: raise exception on bad path? (defauts to False)
+                This may be one of:
+                    FileNotFoundError: path does not exist
+                    BrokenLinkError: symlinked path does not exist
+                        Note: BrokenLinkError is also a FileNotFoundError
+                        subclass.
+                    RecursiveLinkError: symlink found to be recursive
 
         Returns: PathRef derived from input pathRef
             Note that this may be a subclass of PathRef (MissingPath,
@@ -130,15 +148,31 @@ class SymlinkWalk:
         try:
             return next(slw._scan(newPath))
         except StopIteration:
-            return next(iter(slw.bad_paths))
+            badPath = next(iter(slw.bad_paths))
+            if strict:
+                pathStr = quote(str(badPath))
+                if badPath.is_recursive_link():
+                    raise RecursiveLinkError(
+                        f"{pathStr} is a recursive symlink"
+                    )
+                elif badPath.is_broken_link():
+                    raise BrokenLinkError(
+                        f"{pathStr} is a broken symlink"
+                    )
+                else:
+                    raise FileNotFoundError(
+                        f"{pathStr} does not exist"
+                    )
+            return badPath
 
     def iter_dir(
-        self, pathRef: PathRef, resolved: bool = False
+        self, pathRef: PathRef, resolved: bool = False,
+        expand_user: bool = True
     ) -> Iterator[PathRef]:
         if resolved:
             target = pathRef
         else:
-            target = self.resolve_path(pathRef)
+            target = self.resolve_path(pathRef, expand_user=expand_user)
             if not target.exists():
                 self.bad_paths.add(target)
                 return
@@ -146,17 +180,26 @@ class SymlinkWalk:
         yield from self._yield_contents(target)
 
     def iter_tree(
-        self, pathRef: PathRef, resolved: bool = False
+        self, pathRef: PathRef, resolved: bool = False,
+        expand_user: bool = True
     ) -> Iterator[PathRef]:
         if resolved:
             target = pathRef
         else:
-            target = self.resolve_path(pathRef)
+            target = self.resolve_path(pathRef, expand_user=expand_user)
             if not target.exists():
                 self.bad_paths.add(target)
                 return
         self._yield_fn = self._yield_contents
         yield from self._yield_contents(target)
+
+    def reset(self):
+        self.path_hits.clear()
+        self.bad_paths.clear()
+        self.skipped.clear()
+        self._symlinks.clear()
+        self._elem_stack.clear()
+        self._yield_fn = self._yield_path
 
     def _scan(self, pathRef: PathRef) -> Iterator[PathRef]:
         if pathRef.path_or_entry.name == '..':
@@ -227,14 +270,6 @@ class SymlinkWalk:
             with os.scandir(pathRef) as sd:
                 for entry in sd:
                     yield from self._scan(PathRef(entry))
-
-    def reset(self):
-        self.path_hits.clear()
-        self.bad_paths.clear()
-        self.skipped.clear()
-        self._symlinks.clear()
-        self._elem_stack.clear()
-        self._yield_fn = self._yield_path
 
 
 def _parse_command_line():
