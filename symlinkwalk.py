@@ -41,10 +41,8 @@ class RecursiveLinkError(RuntimeError):
     '''
 
 
-@dataclass(slots=True)
-class _PathElem:
-    part: str
-    in_link: bool = False
+class _InLinkElem(str):
+    pass
 
 
 class _InLinkPath(PathRef):
@@ -98,7 +96,7 @@ class SymlinkWalk:
     skipped: set[PathRef]
 
     _symlinks: list[PathRef] = field(repr=_g_debug)
-    _elem_stack: list[_PathElem] = field(repr=_g_debug)
+    _elem_stack: list[str] = field(repr=_g_debug)
     _yield_fn: Callable[[PathRef], Iterator[PathRef]] = field(repr=_g_debug)
 
     def __init__(
@@ -165,12 +163,10 @@ class SymlinkWalk:
         slw = cls()
         if pathRef.path.is_absolute():
             newPath = PathRef(pathRef.path.parts[0])
-            slw._elem_stack[:] = map(_PathElem, pathRef.path.parts[:0:-1])
+            slw._elem_stack[:] = pathRef.path.parts[:0:-1]
         else:
             newPath = PathRef()
-            slw._elem_stack.extend(
-                map(_PathElem, reversed(pathRef.path.parts))
-            )
+            slw._elem_stack.extend(reversed(pathRef.path.parts))
         try:
             return next(slw._scan(newPath))
         except StopIteration:
@@ -308,19 +304,18 @@ class SymlinkWalk:
                 if link.is_absolute():
                     pathRef = PathRef(link.parts[0])
                     self._elem_stack.extend(
-                        _PathElem(part, in_link=True)
-                        for part in link.parts[:0:-1]
+                        map(_InLinkElem, link.parts[:0:-1])
                     )
                 else:
                     pathRef = PathRef(pathRef.path.parent)
                     self._elem_stack.extend(
-                        _PathElem(part, in_link=True)
-                        for part in reversed(link.parts)
+                        map(_InLinkElem, reversed(link.parts))
                     )
 
             if pathRef.exists():
                 if self._elem_stack:
-                    part, in_link = astuple(self._elem_stack.pop())
+                    part = self._elem_stack.pop()
+                    in_link = isinstance(part, _InLinkElem)
                     subPath = _InLinkPath(pathRef.path/part) if in_link \
                         else PathRef(pathRef.path/part)
                     yield from self._scan(subPath)
