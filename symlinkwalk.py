@@ -344,8 +344,30 @@ class SymlinkWalk:
     def _scan(self, pathRef: PathRef) -> Iterator[PathRef]:
         #   _scan() is a recursive method which does most of the actual work.
 
-        #   The first thing we want to screen if whether or not the path
-        #   actually exists?
+        #   We need to make sure the path is normalized before we can run
+        #   various checks on it. pathlib classes happily collapse path
+        #   sequences like '//' or './' for you automatically, but '..' is left
+        #   intact, so we need to deal with that.
+        if pathRef.path_or_entry.name == '..':
+            pathRef = PathRef(os.path.normpath(pathRef))
+
+        #   If the path has already been flagged as bad, there is no point in
+        #   examining it again.
+        if pathRef in self.bad_paths:
+
+            #   We want to clear out any path elements left on the stack before
+            #   returning early like this, lest some earlier recursion of
+            #   _scan() tries to keep adding them.
+            self._elem_stack.clear()
+            return
+
+        #   Next we check if the path should be excluded?
+        if not self.path_filter(pathRef):
+            self.skipped.add(pathRef)
+            self._elem_stack.clear()
+            return
+
+        #   Now check if the path actually exists.
         if not pathRef.exists():
 
             #   If it does not, we want to return early without yielding it,
@@ -359,24 +381,6 @@ class SymlinkWalk:
                 self.bad_paths.add(MissingPath(
                     pathRef.path.joinpath(*reversed(self._elem_stack))
                 ))
-
-            #   We want to clear out any path elements left on the stack before
-            #   returning early like this, lest some earlier recursion of
-            #   _scan() tries to keep adding them.
-            self._elem_stack.clear()
-            return
-
-        #   We need to make sure the path is normalized before we can run it
-        #   against filters and what not. pathlib classes happily collapse path
-        #   sequences like '//' or './' for you automatically, but '..' is left
-        #   intact, so we need to deal with that.
-        if pathRef.path_or_entry.name == '..':
-            pathRef = PathRef(os.path.normpath(pathRef))
-
-        #   Now we can run the path_filter to check if that path should be
-        #   excluded?
-        if not self.path_filter(pathRef):
-            self.skipped.add(pathRef)
             self._elem_stack.clear()
             return
 
