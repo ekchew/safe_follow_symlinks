@@ -24,7 +24,7 @@ import sys
 
 #   Makes private SymlinkWalk attributes appear in repr() and prints a stack
 #   crawl when an exception is caught in command line mode.
-_g_debug: bool = True
+_g_debug: bool = False
 
 
 class BrokenLinkError(FileNotFoundError):
