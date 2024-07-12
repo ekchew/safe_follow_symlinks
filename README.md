@@ -200,8 +200,8 @@ This is a generator that yields all paths in a directory in fully-resolved
 form, provided:
 
 1. The path is not rejected by your custom `path_filter`.
-2. The path can, if fact, be properly resolved to an existing object.
-3. If attribute `yield_unique=False` or the path has not already been yielded.
+2. The path can, in fact, be properly resolved to an existing object.
+3. Either `yield_unique=False` or this the first enounter of the path.
 
 Failing any of these, the output `skipped`, `bad_paths`, and `path_hits`
 attributes will be updated with the rejected paths, respectively.
