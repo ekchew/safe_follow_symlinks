@@ -168,7 +168,7 @@ manager.
 
     with Symlinkwalk(path_filter=zip_file_filter) as slw:
         for pr in slw.iter_tree('foo'):
-            print(str(pr))
+            print(pr)
 
 `SymlinkWalk` generates a lot of state, so this ensures that it gets released
 when you are done with it (or at least flagged for release by the garbage
