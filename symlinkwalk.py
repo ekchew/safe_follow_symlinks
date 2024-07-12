@@ -14,7 +14,7 @@ from support.pathref import PathRef, MissingPath, BrokenLink, RecursiveLink
 
 from argparse import ArgumentParser
 from collections.abc import Callable, Iterator
-from dataclasses import astuple, dataclass, field
+from dataclasses import dataclass, field
 from shlex import quote
 from traceback import print_exc
 import fnmatch
@@ -42,10 +42,17 @@ class RecursiveLinkError(RuntimeError):
 
 
 class _InLinkElem(str):
+    #   Path elements are normally just plain str instances, but this subclass
+    #   flags them as being part of a symlink's stored path that is being
+    #   resolved.
     pass
 
 
 class _InLinkPath(PathRef):
+    #   Likewise, a tentative new PathRef that is being evaluated can be
+    #   flagged as part of a symlink's resolution using this subclass.
+    #   We need to keep track of this so that we can distinguish between
+    #   broken symlinks and ordinary missing paths.
     pass
 
 
@@ -95,6 +102,21 @@ class SymlinkWalk:
     bad_paths: set[PathRef]
     skipped: set[PathRef]
 
+    #   Private attributes:
+    #       _symlinks: a stack of symlinks encountered during recursion
+    #       _elem_stack: a stack of path elements
+    #           These are elements yet to be added to the path we are trying to
+    #           construct. For example, if we have the path '/foo' so far with
+    #           the stack looking like ['baz', 'bar'], the path should
+    #           eventually grow out to '/foo/bar/baz' with the stack emptying
+    #           to [] in the simplest case.
+    #       _yield_fn: one of either _yield_path() or _yield_contents()
+    #           The yield function is the only method that can ultimately
+    #           yield output from the iter_dir() and iter_tree() generators.
+    #           _yield_path simply yields the one PathRef it gets, and it used
+    #           by resolve_path() and iter_dir(). _yield_contents() yields its
+    #           immediate PathRef also, but then if it is a directory, it will
+    #           recurse into it. As such, it is used by iter_tree().
     _symlinks: list[PathRef] = field(repr=_g_debug)
     _elem_stack: list[str] = field(repr=_g_debug)
     _yield_fn: Callable[[PathRef], Iterator[PathRef]] = field(repr=_g_debug)
@@ -160,17 +182,42 @@ class SymlinkWalk:
         '''
         if expand_user:
             pathRef = PathRef(pathRef.path.expanduser())
+
+        #   We need to allocate a temporary SymlinkWalk to walk through the
+        #   path elements given to us.
         slw = cls()
+
+        #   If the input path is absolute, we can begin a new path with just
+        #   the root element of it and place the remaining elements on the
+        #   stack.
         if pathRef.path.is_absolute():
             newPath = PathRef(pathRef.path.parts[0])
-            slw._elem_stack[:] = pathRef.path.parts[:0:-1]
+
+            #   Given that _elem_stack is a stack, the remaining elements need
+            #   to populate it in reverse order. This odd-looking slice should
+            #   reverse everything past the zeroth element.
+            slw._elem_stack.extend(pathRef.path.parts[:0:-1])
+
+        #   With a relative path, the new path should begin with the current
+        #   working directory, which PathRef() should give us by default. Then
+        #   all of the remaining elements should be pushed onto the stack.
         else:
             newPath = PathRef()
             slw._elem_stack.extend(reversed(pathRef.path.parts))
+
+        #   The _scan() generator should hopefully yield a single PathRef built
+        #   by extending newPath with each path element from the stack, with
+        #   any symlinks resolved along the way.
         try:
             return next(slw._scan(newPath))
+
+        #   If nothing emerges from _scan(), that means something went wrong,
+        #   but it should placed what it has in bad_paths instead.
         except StopIteration:
             badPath = next(iter(slw.bad_paths))
+
+            #   In the strict resolution case, we need to raise an exception at
+            #   this point.
             if strict:
                 pathStr = quote(str(badPath))
                 if badPath.is_recursive_link():
@@ -185,6 +232,9 @@ class SymlinkWalk:
                     raise FileNotFoundError(
                         f"{pathStr} does not exist"
                     )
+
+            #   Otherwise, we simply return the bad path and leave it up to the
+            #   caller to determine how to proceed with it.
             return badPath
 
     def iter_dir(
@@ -230,6 +280,9 @@ class SymlinkWalk:
             be followed once, however, before it can be discovered to be
             recursive.
         '''
+
+        #   Call resolve_path() to make sure we have a fully resolved path if
+        #   necessary.
         if resolved:
             target = pathRef
         else:
@@ -237,8 +290,17 @@ class SymlinkWalk:
             if not target.exists():
                 self.bad_paths.add(target)
                 return
-        self._yield_fn = self._yield_path
+
+        #   Make sure we are dealing with a directory. Otherwise, there are
+        #   no contents to iterate over.
         if pathRef.path_or_entry.is_dir():
+
+            #   Select the non-recursive yield function.
+            self._yield_fn = self._yield_path
+
+            #   SymlinkWalk uses os.scandir() to generate directory listings,
+            #   as it tends to be very fast compared os.listdir() or
+            #   pathlib.Path.iterdir().
             with os.scandir(pathRef) as sd:
                 for entry in sd:
                     yield from self._scan(PathRef(entry))
@@ -261,26 +323,67 @@ class SymlinkWalk:
             if not target.exists():
                 self.bad_paths.add(target)
                 return
+
+        #   In this case, we want to use the recursive _yield_contents() yield
+        #   function.
         self._yield_fn = self._yield_contents
         yield from self._yield_contents(target)
 
     def reset(self):
+        '''
+        This method clears all of the output containers and internal buffers
+        to release memory resources. It is automatically called as you exit the
+        with block if you allocated the SymlinkWalk as a context manager.
+        '''
         self.path_hits.clear()
         self.bad_paths.clear()
         self.skipped.clear()
         self._symlinks.clear()
         self._elem_stack.clear()
-        self._yield_fn = self._yield_path
 
     def _scan(self, pathRef: PathRef) -> Iterator[PathRef]:
+        #   _scan() is a recursive method which does most of the actual work.
+
+        #   The first thing we want to screen if whether or not the path
+        #   actually exists?
+        if not pathRef.exists():
+
+            #   If it does not, we want to return early without yielding it,
+            #   but not before we add it to the bad_paths. Depending on whether
+            #   the section of path we are constructing is within a symlink's
+            #   stored path or not determines whether it should be reported as
+            #   a BrokenLink or just a more general MissingPath.
+            if isinstance(pathRef, _InLinkPath):
+                self.bad_paths.add(BrokenLink(self._symlinks[-1].ref))
+            else:
+                self.bad_paths.add(MissingPath(
+                    pathRef.path.joinpath(*reversed(self._elem_stack))
+                ))
+
+            #   We want to clear out any path elements left on the stack before
+            #   returning early like this, lest some earlier recursion of
+            #   _scan() tries to keep adding them.
+            self._elem_stack.clear()
+            return
+
+        #   We need to make sure the path is normalized before we can run it
+        #   against filters and what not. pathlib classes happily collapse path
+        #   sequences like '//' or './' for you automatically, but '..' is left
+        #   intact, so we need to deal with that.
         if pathRef.path_or_entry.name == '..':
             pathRef = PathRef(os.path.normpath(pathRef))
 
+        #   Now we can run the path_filter to check if that path should be
+        #   excluded?
         if not self.path_filter(pathRef):
             self.skipped.add(pathRef)
             self._elem_stack.clear()
             return
 
+        #   Next, let's consider the yield_unique case. If we already have a
+        #   hit on the current path, we want to increment the hit count and
+        #   return early. Otherwise, we make a new entry with the count set to
+        #   1 and continue.
         if self.yield_unique:
             try:
                 self.path_hits[pathRef] += 1
@@ -290,58 +393,94 @@ class SymlinkWalk:
                 self._elem_stack.clear()
                 return
 
-        symlink: bool = False
+        symlink = pathRef.path_or_entry.is_symlink()
         try:
-            if pathRef.path_or_entry.is_symlink():
+            if symlink:
+
+                #   Whenever we encounter a symlink, we need to check if it is
+                #   on the stack of symlinks we have already encountered?
+                #   If so, we want to flag it as a recursive link not follow
+                #   it again.
                 if pathRef in self._symlinks:
                     self.bad_paths.add(RecursiveLink(pathRef.ref))
                     self._elem_stack.clear()
                     return
-                self._symlinks.append(pathRef)
-                symlink = pathRef
 
+                #   Otherwise, this new one goes on the stack.
+                self._symlinks.append(pathRef)
+
+                #   Next, we need to read the stored path out of it.
                 link = pathRef.path.readlink()
+
+                #   If it is an absolute symlink, the pathRef should be reset
+                #   to the root element and the remainder of it should be
+                #   pushed onto the path element stack.
                 if link.is_absolute():
                     pathRef = PathRef(link.parts[0])
+
+                    #   Note that the elements are are adding now are flagged
+                    #   as in-link elements. We need to record them as such so
+                    #   that we can tell we are in a broken link should one of
+                    #   them turn out to be missing.
                     self._elem_stack.extend(
                         map(_InLinkElem, link.parts[:0:-1])
                     )
+
+                #   Otherwise, the path needs to be continued relative to the
+                #   parent directory containing the symlink.
                 else:
                     pathRef = PathRef(pathRef.path.parent)
                     self._elem_stack.extend(
                         map(_InLinkElem, reversed(link.parts))
                     )
 
-            if pathRef.exists():
-                if self._elem_stack:
-                    part = self._elem_stack.pop()
-                    in_link = isinstance(part, _InLinkElem)
-                    subPath = _InLinkPath(pathRef.path/part) if in_link \
-                        else PathRef(pathRef.path/part)
-                    yield from self._scan(subPath)
-                else:
-                    yield from self._yield_fn(pathRef)
+            #   At this point, we need to check if there are any more elements
+            #   waiting on the stack.
+            if self._elem_stack:
+
+                #   That being the case, we should pop off the next one and
+                #   extend the current path with it to form a new subpath.
+                #   In doing so, we need to keep track of whether the next path
+                #   element--and therefore the subpath--are within a symlink's
+                #   store path.
+                part = self._elem_stack.pop()
+                in_link = isinstance(part, _InLinkElem)
+                subPath = _InLinkPath(pathRef.path/part) if in_link \
+                    else PathRef(pathRef.path/part)
+
+                #   This is where we call _scan() again recursively to handle
+                #   the subpath.
+                yield from self._scan(subPath)
+
             else:
-                if isinstance(pathRef, _InLinkPath):
-                    self.bad_paths.add(BrokenLink(self._symlinks[-1].ref))
-                else:
-                    self.bad_paths.add(MissingPath(
-                        pathRef.path.joinpath(*reversed(self._elem_stack))
-                    ))
-                self._elem_stack.clear()
+                #   Once the path element stack is exhausted, we can finally
+                #   yield the path we have built. Note that in the case of
+                #   iter_tree(), this may not necessarily be the end of the
+                #   recursion, as its yield function--_yield_contents()--may
+                #   yet call _scan() again if pathRef points to a subdirectory.
+                yield from self._yield_fn(pathRef)
+
+        #   Before _scan() can return, we must make certain that if this
+        #   recursion pushed a new symlink onto the stack, it is popped back
+        #   off to balance it.
         finally:
             if symlink:
                 self._symlinks.pop()
 
     def _yield_path(self, pathRef: PathRef) -> Iterator[PathRef]:
+        #   The non-recursive _yield_fn used by resolve_path() and iter_dir().
         yield pathRef
 
     def _yield_contents(self, pathRef: PathRef) -> Iterator[PathRef]:
+        #   The recursive _yield_fn used by iter_tree().
         yield pathRef
         if pathRef.path_or_entry.is_dir():
             with os.scandir(pathRef) as sd:
                 for entry in sd:
                     yield from self._scan(PathRef(entry))
+
+
+# ==== Command Line Implementation ============================================
 
 
 def _parse_command_line():
@@ -398,6 +537,10 @@ def _parse_command_line():
 
 def _get_path_filter(patterns: list[str]) -> Callable[[PathRef], bool]:
 
+    #   Here, we implement a path_filter for SymlinkWalk that looks for any
+    #   matches to an exclude pattern to reject the path. path_filter() is
+    #   enclosed with the _get_path_filter() method so that it can always
+    #   access its patterns argument.
     def path_filter(pathRef: PathRef) -> bool:
         s = str(pathRef)
         for pattern in patterns:
@@ -408,60 +551,71 @@ def _get_path_filter(patterns: list[str]) -> Callable[[PathRef], bool]:
     return path_filter if patterns else SymlinkWalk.allow_all_paths
 
 
-def _print_path(pr: PathRef):
+def _print_existing_path(pr: PathRef):
+    #   A function to print existing paths to stdout.
     code = 'd' if pr.path_or_entry.is_dir() else 'f'
     print(code, pr)
 
 
+def _print_bad_path(pr: PathRef):
+    #   A function to print broken/recursive symlinks or missing paths.
+    if pr.is_broken_link():
+        print('b', pr)
+    elif pr.is_recursive_link():
+        print('r', pr)
+    else:
+        print('m', pr)
+
+
 if __name__ == '__main__':
+
+    #   Parse the command line and pull the target paths out of it in
+    #   PathRef form.
     args = _parse_command_line()
+    targets = [PathRef(p) for p in args.targets] if args.targets \
+        else [PathRef()]
+
     try:
-        path_filter = _get_path_filter(args.exclude)
-        slw = SymlinkWalk(
-            path_filter=path_filter, yield_unique=args.unique_paths
-        )
-        targets = [PathRef(p) for p in args.targets] if args.targets \
-            else [PathRef()]
         if args.resolve == 'path':
             for target in targets:
                 pr = SymlinkWalk.resolve_path(target)
-                if pr.is_broken_link():
-                    print('b', pr)
-                elif pr.is_recursive_link():
-                    print('r', pr)
-                elif pr.exists():
-                    _print_path(pr)
+                if pr.is_bad_path():
+                    _print_bad_path(pr)
                 else:
-                    print('m', pr)
+                    _print_existing_path(pr)
         else:
+            #   For the iterative 'list' and 'tree' options, the path filter
+            #   is relevant.
+            path_filter = _get_path_filter(args.exclude)
+
+            #   Create a new SymlinkWalk instance we will use to scan all of
+            #   the targets.
+            slw = SymlinkWalk(
+                path_filter=path_filter, yield_unique=args.unique_paths
+            )
+
             for target in targets:
-                if args.resolve == 'path':
-                    pr = SymlinkWalk.resolve_path(target)
-                    if pr.exists():
-                        _print_path(pr)
+                if args.resolve == 'list':
+                    for pr in slw.iter_dir(target):
+                        _print_existing_path(pr)
                 else:
-                    if args.resolve == 'list':
-                        for pr in slw.iter_dir(target):
-                            _print_path(pr)
-                    else:
-                        for pr in slw.iter_tree(target):
-                            _print_path(pr)
-                    for pr in sorted(slw.skipped):
-                        print('x', pr)
+                    for pr in slw.iter_tree(target):
+                        _print_existing_path(pr)
+
+            #   Having completed the scan and printed all of the 'f' and 'd'
+            #   entries, it is time to finish up with the 'x', 'u#', 'b', 'r',
+            #   and 'm' ones.
+            for pr in sorted(slw.skipped):
+                print('x', pr)
             if args.unique_paths:
+                #   Only print the paths with more than 1 hit.
                 for pr, n in sorted(
                     (pr, n) for pr, n in slw.path_hits.items() if n > 1
                 ):
                     print(f'u{n}', pr)
-            for pr in slw.skipped:
-                print("x", pr)
             for pr in sorted(slw.bad_paths):
-                if pr.is_broken_link():
-                    print('b', pr)
-                elif pr.is_recursive_link():
-                    print('r', pr)
-                else:
-                    print('m', pr)
+                _print_bad_path(pr)
+
     except Exception as ex:
         print('ERROR:', ex, file=sys.stderr)
         if _g_debug:
